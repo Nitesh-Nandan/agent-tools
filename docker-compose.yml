@@ -35,6 +35,7 @@ services:
       # Gmail SMTP (optional). Set in project-root .env — loaded by Compose for ${...} substitution.
       EMAIL_USERNAME: ${EMAIL_USERNAME:-}
       EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-"Personal Agent"}
     depends_on:
       db:
         condition: service_healthy

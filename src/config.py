@@ -24,6 +24,7 @@ class AppConfig(BaseModel):
     # Email Settings
     email_username: str | None
     email_password: str | None
+    email_from_name: str
 
 def load_config() -> AppConfig:
     """Load configuration from environment variables."""
@@ -37,6 +38,7 @@ def load_config() -> AppConfig:
         mcp_port=int(os.environ.get("MCP_PORT", "8000")),
         email_username=os.environ.get("EMAIL_USERNAME"),
         email_password=os.environ.get("EMAIL_PASSWORD"),
+        email_from_name=os.environ.get("EMAIL_FROM_NAME", "Personal Agent"),
     )
 
 config = load_config()

@@ -4,6 +4,7 @@ Email sending service using Gmail SMTP.
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formataddr
 from typing import Optional
 
 from src.config import config
@@ -12,16 +13,23 @@ from src.config import config
 class EmailSender:
     """A class to handle email sending via Gmail SMTP."""
     
-    def __init__(self, username: Optional[str] = None, password: Optional[str] = None):
+    def __init__(
+        self,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        from_name: Optional[str] = None,
+    ):
         """
         Initialize EmailSender for Gmail.
         
         Args:
             username: Gmail address (from EMAIL_USERNAME env var if not provided)
             password: Gmail app password (from EMAIL_PASSWORD env var if not provided)
+            from_name: Display name in From header (from EMAIL_FROM_NAME if not provided)
         """
         self.username = username or config.email_username
         self.password = password or config.email_password
+        self.from_name = from_name if from_name is not None else config.email_from_name
         self.smtp_host = 'smtp.gmail.com'
         self.smtp_port = 587
     
@@ -56,7 +64,7 @@ class EmailSender:
                 
             # Create message
             msg = MIMEMultipart('alternative')
-            msg['From'] = f"My Website <{self.username}>"
+            msg['From'] = formataddr((self.from_name, self.username or ""))
             msg['To'] = ", ".join(to)
             msg['Subject'] = subject
             
