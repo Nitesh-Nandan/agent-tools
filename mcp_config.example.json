@@ -48,6 +48,7 @@
         "-e", "DB_PASSWORD=agent_secret",
         "-e", "EMAIL_USERNAME=you@gmail.com",
         "-e", "EMAIL_PASSWORD=abcdefghijklmnop",
+        "-e", "EMAIL_FROM_NAME=AI Coach",
         "agent-tools-image",
         "python",
         "main.py",
