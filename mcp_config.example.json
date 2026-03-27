@@ -1,0 +1,59 @@
+{
+  "mcpServers": {
+    "agent-tools-sse": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/client-sse",
+        "http://localhost:7075/sse"
+      ]
+    },
+    "agent-tools-stdio-local": {
+      "command": "uv",
+      "args": ["run", "main.py", "--transport", "stdio"],
+      "env": {
+        "DB_HOST": "localhost",
+        "DB_PORT": "5455",
+        "DB_NAME": "agent_memory",
+        "DB_USER": "agent",
+        "DB_PASSWORD": "agent_secret"
+      },
+      "cwd": "/Users/nn359v/workspace/nitesh/2026/agent-tools"
+    },
+    "agent-tools-stdio-docker-exec": {
+      "command": "docker",
+      "args": [
+        "compose",
+        "-f",
+        "/Users/nn359v/workspace/nitesh/2026/agent-tools/docker-compose.yml",
+        "exec",
+        "-i",
+        "mcp",
+        "python",
+        "main.py",
+        "--transport",
+        "stdio"
+      ]
+    },
+    "agent-tools-stdio-docker-run": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e", "DB_HOST=host.docker.internal",
+        "-e", "DB_PORT=5455",
+        "-e", "DB_NAME=agent_memory",
+        "-e", "DB_USER=agent",
+        "-e", "DB_PASSWORD=agent_secret",
+        "-e", "EMAIL_USERNAME=you@gmail.com",
+        "-e", "EMAIL_PASSWORD=abcdefghijklmnop",
+        "agent-tools-image",
+        "python",
+        "main.py",
+        "--transport",
+        "stdio"
+      ]
+    }
+  }
+}
