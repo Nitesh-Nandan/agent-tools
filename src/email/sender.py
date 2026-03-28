@@ -39,7 +39,8 @@ class EmailSender:
         html_body: str,
         text_body: str,
         to: list[str],
-        reply_to: Optional[str] = None
+        reply_to: Optional[str] = None,
+        from_name: Optional[str] = None
     ) -> bool:
         """
         Send an email with both HTML and plain text versions.
@@ -48,7 +49,9 @@ class EmailSender:
             subject: Email subject
             html_body: HTML email body
             text_body: Plain text email body
+            to: List of recipient email addresses
             reply_to: Reply-to email address
+            from_name: Optional display name for the From header
             
         Returns:
             True if email sent successfully, False otherwise
@@ -64,7 +67,7 @@ class EmailSender:
                 
             # Create message
             msg = MIMEMultipart('alternative')
-            msg['From'] = formataddr((self.from_name, self.username or ""))
+            msg['From'] = formataddr((from_name or self.from_name, self.username or ""))
             msg['To'] = ", ".join(to)
             msg['Subject'] = subject
             

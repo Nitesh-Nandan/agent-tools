@@ -177,6 +177,7 @@ async def send_email(
     text_body: str,
     to: list[str],
     reply_to: str | None = None,
+    from_name: str | None = None,
 ) -> dict:
     """Send an email using configured SMTP credentials."""
     import asyncio
@@ -194,7 +195,8 @@ async def send_email(
             html_body=html_body,
             text_body=text_body,
             to=to,
-            reply_to=reply_to
+            reply_to=reply_to,
+            from_name=from_name
         )
     )
     
