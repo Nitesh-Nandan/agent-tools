@@ -22,8 +22,8 @@ help:
 	@echo "    make docker-build     Build a standalone Docker image (agent-kit-image)"
 	@echo ""
 	@echo "  DB Utilities"
-	@echo "    make dump             Export tables to dumps/ (plain SQL)"
-	@echo "    make restore FILE=... Restore from a dump file"
+	@echo "    make backup           Export schema + data → migrations/<date>_backup.sql"
+	@echo "    make restore FILE=... Restore from a backup file"
 	@echo "    make stats            Show row counts, sizes, recent activity"
 	@echo "    make reset            Drop + recreate tables  ⚠ DEV ONLY"
 	@echo ""
@@ -59,14 +59,14 @@ docker-build:
 	docker build -t agent-kit-image .
 
 # ── DB Utilities ───────────────────────────────────────────────────────────────
-.PHONY: dump
-dump:
-	$(MANAGE) dump
+.PHONY: backup
+backup:
+	$(MANAGE) backup migrations/$(shell date +%Y%m%d)_backup.sql
 
 .PHONY: restore
 restore:
 ifndef FILE
-	$(error FILE is required — usage: make restore FILE=dumps/agent_memory_<timestamp>.sql)
+	$(error FILE is required — usage: make restore FILE=migrations/20260530_backup.sql)
 endif
 	$(MANAGE) restore $(FILE)
 

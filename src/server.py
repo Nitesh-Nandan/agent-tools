@@ -2,8 +2,11 @@
 Agent Tools MCP server — persistent memory (PostgreSQL) plus email (SMTP).
 
 Tools:
-  - put_memory, get_memory, get_memory_history : agent memory backed by Postgres
-  - send_email                                 : Gmail SMTP (when configured)
+  - register_project                            : register a project before writing memory
+  - list_projects                               : list all registered projects with stats
+  - put_memory, get_memory, get_memory_history  : checkpoint storage backed by Postgres
+  - list_keys                                   : list all keys for a project
+  - send_email                                  : Gmail SMTP (when configured)
 
 Key naming convention  : <domain>:<entity>:<attribute>  e.g. email:last_sent
 Project ID convention  : <org>:<user>:<workflow>         e.g. acme:alice:send_email
@@ -16,6 +19,7 @@ import re
 from contextlib import asynccontextmanager
 from typing import Any
 
+import asyncpg
 from fastmcp import FastMCP
 
 from src.memory import db
@@ -59,7 +63,34 @@ mcp = FastMCP(name="agent-kit", lifespan=lifespan)
 
 @mcp.tool(
     description=(
-        "Store or update a value in agent memory. "
+        "Register a project before writing memory to it. "
+        "Idempotent — calling again updates the name and description. "
+        "project_id examples: 'acme:alice:send_email', 'acme:bob:invoice_flow'."
+    )
+)
+async def register_project(
+    project_id: str,
+    name: str,
+    description: str | None = None,
+) -> dict:
+    _validate_project_id(project_id)
+    await db.register_project(project_id, name, description)
+    return {"status": "ok", "project_id": project_id, "name": name}
+
+
+@mcp.tool(
+    description=(
+        "List all registered projects with their key count and last updated time."
+    )
+)
+async def list_projects() -> dict:
+    projects = await db.list_projects()
+    return {"count": len(projects), "projects": projects}
+
+
+@mcp.tool(
+    description=(
+        "Store or update a checkpoint value in agent memory. "
         "Atomically updates the latest state and appends an immutable history entry. "
         "key examples: 'email:last_sent', 'email:retry_count', "
         "'user:123:last_login', 'workflow:step_1:status'. "
@@ -67,10 +98,15 @@ mcp = FastMCP(name="agent-kit", lifespan=lifespan)
     )
 )
 async def put_memory(project_id: str, key: str, value: Any) -> dict:
-    """Upsert memory_state and append to memory_log in a single transaction."""
     _validate_project_id(project_id)
     _validate_key(key)
-    await db.put_memory(project_id, key, value)
+    try:
+        await db.put_memory(project_id, key, value)
+    except asyncpg.ForeignKeyViolationError:
+        return {
+            "status": "error",
+            "message": f"Project '{project_id}' is not registered. Call register_project first.",
+        }
     return {"status": "ok", "project_id": project_id, "key": key}
 
 
@@ -82,7 +118,6 @@ async def put_memory(project_id: str, key: str, value: Any) -> dict:
     )
 )
 async def get_memory(project_id: str, key: str) -> dict | None:
-    """Fetch latest value from memory_state."""
     _validate_project_id(project_id)
     _validate_key(key)
     result = await db.get_memory(project_id, key)
@@ -99,7 +134,6 @@ async def get_memory(project_id: str, key: str) -> dict | None:
     )
 )
 async def get_memory_history(project_id: str, key: str, limit: int = 10) -> dict:
-    """Fetch ordered history from memory_log."""
     _validate_project_id(project_id)
     _validate_key(key)
     if not (1 <= limit <= 100):
@@ -115,18 +149,38 @@ async def get_memory_history(project_id: str, key: str, limit: int = 10) -> dict
 
 @mcp.tool(
     description=(
-        "Send an email with both HTML and plain text versions using Gmail SMTP."
+        "List all keys for a project. "
+        "Provide either project_id or project_name — one is required."
     )
+)
+async def list_keys(
+    project_id: str | None = None,
+    project_name: str | None = None,
+) -> dict:
+    if not project_id and not project_name:
+        return {"status": "error", "message": "Provide either project_id or project_name."}
+
+    if not project_id:
+        project_id = await db.resolve_project_by_name(project_name)
+        if project_id is None:
+            return {"status": "error", "message": f"No project found with name: {project_name!r}"}
+
+    _validate_project_id(project_id)
+    keys = await db.list_keys(project_id)
+    return {"project_id": project_id, "count": len(keys), "keys": keys}
+
+
+@mcp.tool(
+    description="Send an email with both HTML and plain text versions using Gmail SMTP."
 )
 async def send_email(
     subject: str,
     html_body: str,
     text_body: str,
     to: list[str],
+    from_name: str,
     reply_to: str | None = None,
-    from_name: str | None = None,
 ) -> dict:
-    """Send an email using configured SMTP credentials."""
     if not email_sender.is_configured():
         return {"status": "error", "message": "Email credentials not configured on the server"}
 
@@ -138,8 +192,8 @@ async def send_email(
             html_body=html_body,
             text_body=text_body,
             to=to,
-            reply_to=reply_to,
             from_name=from_name,
+            reply_to=reply_to,
         ),
     )
 

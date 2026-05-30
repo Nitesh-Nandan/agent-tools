@@ -19,8 +19,8 @@ def send_email(
     html_body: str,
     text_body: str,
     to: list[str],
+    from_name: str,
     reply_to: str | None = None,
-    from_name: str | None = None,
 ) -> bool:
     if not config.email_username or not config.email_password:
         print("✗ Email credentials not configured")
@@ -31,7 +31,7 @@ def send_email(
 
     try:
         msg = MIMEMultipart("alternative")
-        display_name = from_name or config.email_from_name
+        display_name = from_name
         msg["From"] = formataddr((display_name, config.email_username))
         msg["To"] = ", ".join(to)
         msg["Subject"] = subject

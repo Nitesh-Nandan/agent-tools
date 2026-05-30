@@ -8,7 +8,6 @@ All writes are transactional: UPSERT into memory_state + INSERT into memory_log.
 from __future__ import annotations
 
 import json
-import uuid
 from typing import Any
 
 import asyncpg
@@ -56,8 +55,31 @@ async def close_pool() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Core operations
+# SQL
 # ---------------------------------------------------------------------------
+
+_UPSERT_PROJECT = """
+INSERT INTO projects (project_id, name, description)
+VALUES ($1, $2, $3)
+ON CONFLICT (project_id)
+DO UPDATE SET
+    name        = EXCLUDED.name,
+    description = EXCLUDED.description;
+"""
+
+_LIST_PROJECTS = """
+SELECT
+    p.project_id,
+    p.name,
+    p.description,
+    p.created_at,
+    COUNT(ms.key)      AS key_count,
+    MAX(ms.updated_at) AS last_updated
+FROM projects p
+LEFT JOIN memory_state ms ON ms.project_id = p.project_id
+GROUP BY p.project_id, p.name, p.description, p.created_at
+ORDER BY p.created_at DESC;
+"""
 
 _UPSERT_STATE = """
 INSERT INTO memory_state (project_id, key, value, updated_at)
@@ -69,8 +91,8 @@ DO UPDATE SET
 """
 
 _INSERT_LOG = """
-INSERT INTO memory_log (id, project_id, key, value, created_at)
-VALUES ($1, $2, $3, $4, now());
+INSERT INTO memory_log (project_id, key, value, created_at)
+VALUES ($1, $2, $3, now());
 """
 
 _GET_STATE = """
@@ -87,15 +109,56 @@ ORDER BY created_at DESC
 LIMIT $3;
 """
 
+_RESOLVE_PROJECT_BY_NAME = """
+SELECT project_id FROM projects WHERE name = $1 LIMIT 1;
+"""
+
+_LIST_KEYS = """
+SELECT key, value, updated_at
+FROM memory_state
+WHERE project_id = $1
+ORDER BY key;
+"""
+
+
+# ---------------------------------------------------------------------------
+# Operations
+# ---------------------------------------------------------------------------
+
+async def register_project(
+    project_id: str,
+    name: str,
+    description: str | None = None,
+) -> None:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(_UPSERT_PROJECT, project_id, name, description)
+
+
+async def list_projects() -> list[dict]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(_LIST_PROJECTS)
+    return [
+        {
+            "project_id": row["project_id"],
+            "name": row["name"],
+            "description": row["description"],
+            "created_at": row["created_at"].isoformat(),
+            "key_count": row["key_count"],
+            "last_updated": row["last_updated"].isoformat() if row["last_updated"] else None,
+        }
+        for row in rows
+    ]
+
 
 async def put_memory(project_id: str, key: str, value: Any) -> None:
     """Atomically upsert latest state and append an immutable log entry."""
     pool = await get_pool()
-    log_id = str(uuid.uuid4())
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(_UPSERT_STATE, project_id, key, value)
-            await conn.execute(_INSERT_LOG, log_id, project_id, key, value)
+            await conn.execute(_INSERT_LOG, project_id, key, value)
 
 
 async def get_memory(project_id: str, key: str) -> dict | None:
@@ -118,5 +181,23 @@ async def get_memory_history(project_id: str, key: str, limit: int = 10) -> list
         rows = await conn.fetch(_GET_HISTORY, project_id, key, limit)
     return [
         {"value": row["value"], "created_at": row["created_at"].isoformat()}
+        for row in rows
+    ]
+
+
+async def resolve_project_by_name(name: str) -> str | None:
+    """Return the project_id for a given project name, or None if not found."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchval(_RESOLVE_PROJECT_BY_NAME, name)
+
+
+async def list_keys(project_id: str) -> list[dict]:
+    """Return all current keys for a project."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(_LIST_KEYS, project_id)
+    return [
+        {"key": row["key"], "updated_at": row["updated_at"].isoformat()}
         for row in rows
     ]

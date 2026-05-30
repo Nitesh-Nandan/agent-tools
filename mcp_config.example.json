@@ -12,24 +12,9 @@
       "command": "uv",
       "args": ["run", "main.py", "--transport", "stdio"],
       "env": {
-        "DATABASE_URL": "postgresql://agent:agent_secret@localhost:5455/agent_memory"
+        "DATABASE_URL": "postgresql://agent:agent_secret@localhost:5432/agent_memory"
       },
-      "cwd": "/Users/nn359v/workspace/nitesh/2026/agent-kit"
-    },
-    "agent-kit-stdio-docker-exec": {
-      "command": "docker",
-      "args": [
-        "compose",
-        "-f",
-        "/Users/nn359v/workspace/nitesh/2026/agent-kit/docker-compose.yml",
-        "exec",
-        "-i",
-        "mcp",
-        "python",
-        "main.py",
-        "--transport",
-        "stdio"
-      ]
+      "cwd": "/path/to/agent-kit"
     },
     "agent-kit-stdio-docker-run": {
       "command": "docker",
@@ -37,10 +22,10 @@
         "run",
         "-i",
         "--rm",
-        "-e", "DATABASE_URL=postgresql://agent:agent_secret@host.docker.internal:5455/agent_memory",
+        "-e", "DATABASE_URL=postgresql://agent:agent_secret@host.docker.internal:5432/agent_memory",
         "-e", "EMAIL_USERNAME=you@gmail.com",
-        "-e", "EMAIL_PASSWORD=abcdefghijklmnop",
-        "-e", "EMAIL_FROM_NAME=AI Coach",
+        "-e", "EMAIL_PASSWORD=your-app-password",
+        "-e", "EMAIL_FROM_NAME=Personal Agent",
         "agent-kit-image",
         "python",
         "main.py",

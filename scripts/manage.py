@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """
-scripts/manage.py — Agent Tools DB management CLI
-
-Uses only asyncpg (already a project dependency) — no extra drivers needed.
+scripts/manage.py — Agent Kit DB management CLI
 
 Commands:
   create-schema   Create DB tables and indexes (idempotent)
-  reset           Drop and recreate tables (dev only)
-  dump            Export memory_state + memory_log to a SQL file
+  reset           Drop and recreate all tables (dev only)
+  dump            Export all tables to a SQL file
   restore         Restore from a dump SQL file
   stats           Print row counts, table sizes, and recent activity
 
@@ -30,7 +28,6 @@ from pathlib import Path
 import asyncpg
 from dotenv import load_dotenv
 
-# ── Load .env from project root ───────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
@@ -38,7 +35,7 @@ MIGRATIONS_DIR = ROOT / "migrations"
 DUMPS_DIR = ROOT / "dumps"
 
 
-# ── DB connection ─────────────────────────────────────────────────────────────
+# ── DB connection ──────────────────────────────────────────────────────────────
 
 def _dsn() -> str:
     url = os.environ.get("DATABASE_URL")
@@ -51,24 +48,25 @@ async def _connect() -> asyncpg.Connection:
     return await asyncpg.connect(_dsn())
 
 
-# ── Commands ──────────────────────────────────────────────────────────────────
+# ── Commands ───────────────────────────────────────────────────────────────────
 
 async def cmd_create_schema(_args) -> None:
-    """Run the migration SQL — safe to re-run (IF NOT EXISTS guards)."""
-    sql = (MIGRATIONS_DIR / "001_memory_tables.sql").read_text()
+    """Run all migrations in order — safe to re-run (IF NOT EXISTS guards)."""
+    migrations = sorted(MIGRATIONS_DIR.glob("*.sql"))
     conn = await _connect()
     try:
-        print(f"▶  Running migration against {os.environ.get('DB_NAME')} ...")
-        await conn.execute(sql)
+        for path in migrations:
+            print(f"▶  {path.name} ...")
+            await conn.execute(path.read_text())
         print("✓  Schema ready.")
     finally:
         await conn.close()
 
 
 async def cmd_reset(_args) -> None:
-    """Drop and recreate tables. Requires typing 'yes' to confirm."""
-    print(f"⚠  WARNING: This will DROP all data in memory_state and memory_log")
-    print(f"   Database : {os.environ.get('DB_NAME')} @ {os.environ.get('DB_HOST', 'localhost')}")
+    """Drop and recreate all tables. Requires typing 'yes' to confirm."""
+    print("⚠  WARNING: This will DROP all data in projects, memory_state, memory_log")
+    print(f"   DATABASE_URL: {_dsn()}")
     answer = input("Type 'yes' to confirm: ").strip()
     if answer != "yes":
         print("Aborted.")
@@ -78,62 +76,85 @@ async def cmd_reset(_args) -> None:
     try:
         await conn.execute("DROP TABLE IF EXISTS memory_log;")
         await conn.execute("DROP TABLE IF EXISTS memory_state;")
+        await conn.execute("DROP TABLE IF EXISTS projects;")
         print("▶  Tables dropped.")
-        sql = (MIGRATIONS_DIR / "001_memory_tables.sql").read_text()
-        await conn.execute(sql)
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+            await conn.execute(path.read_text())
         print("✓  Tables recreated.")
     finally:
         await conn.close()
 
 
-async def cmd_dump(args) -> None:
-    """
-    Export memory_state and memory_log as plain SQL INSERT statements.
-    No pg_dump required — the output file can be restored with cmd_restore.
-    """
-    DUMPS_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
-    out_path = Path(args.out) if args.out else DUMPS_DIR / f"agent_memory_{timestamp}.sql"
+async def cmd_backup(args) -> None:
+    """Schema + data in one SQL file. Apply to a fresh DB to migrate everything."""
+    out_path = Path(args.out)
 
     conn = await _connect()
     try:
-        state_rows = await conn.fetch("SELECT project_id, key, value, updated_at FROM memory_state ORDER BY project_id, key")
-        log_rows   = await conn.fetch("SELECT id, project_id, key, value, created_at FROM memory_log ORDER BY created_at")
+        project_rows = await conn.fetch(
+            "SELECT project_id, name, description, created_at FROM projects ORDER BY created_at"
+        )
+        state_rows = await conn.fetch(
+            "SELECT project_id, key, value, updated_at FROM memory_state ORDER BY project_id, key"
+        )
+        log_rows = await conn.fetch(
+            "SELECT project_id, key, value, created_at FROM memory_log ORDER BY created_at"
+        )
     finally:
         await conn.close()
 
+    schema = (MIGRATIONS_DIR / "001_initial_schema.sql").read_text().strip()
+
     lines = [
-        f"-- Agent Tools dump — {datetime.now(timezone.utc).isoformat()}",
-        f"-- memory_state rows : {len(state_rows)}",
-        f"-- memory_log rows   : {len(log_rows)}",
+        f"-- Agent Kit backup — {datetime.now(timezone.utc).isoformat()}",
+        f"-- projects     : {len(project_rows)} rows",
+        f"-- memory_state : {len(state_rows)} rows",
+        f"-- memory_log   : {len(log_rows)} rows",
         "",
+        "-- schema",
+        schema,
+        "",
+        "-- data",
         "BEGIN;",
         "",
-        "-- memory_state",
+        "-- projects",
     ]
 
+    for r in project_rows:
+        name = r["name"].replace("'", "''")
+        desc = r["description"].replace("'", "''") if r["description"] else None
+        desc_sql = f"'{desc}'" if desc is not None else "NULL"
+        lines.append(
+            f"INSERT INTO projects (project_id, name, description, created_at) VALUES "
+            f"('{r['project_id']}', '{name}', {desc_sql}, "
+            f"'{r['created_at'].isoformat()}') ON CONFLICT DO NOTHING;"
+        )
+
+    lines += ["", "-- memory_state"]
     for r in state_rows:
-        value_escaped = json.dumps(json.loads(r["value"])).replace("'", "''")
+        val = json.dumps(json.loads(r["value"])).replace("'", "''")
         lines.append(
             f"INSERT INTO memory_state (project_id, key, value, updated_at) VALUES "
-            f"('{r['project_id']}', '{r['key']}', '{value_escaped}'::jsonb, '{r['updated_at'].isoformat()}')"
-            f" ON CONFLICT (project_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at;"
+            f"('{r['project_id']}', '{r['key']}', '{val}'::jsonb, "
+            f"'{r['updated_at'].isoformat()}') ON CONFLICT DO NOTHING;"
         )
 
     lines += ["", "-- memory_log"]
     for r in log_rows:
-        value_escaped = json.dumps(json.loads(r["value"])).replace("'", "''")
+        val = json.dumps(json.loads(r["value"])).replace("'", "''")
         lines.append(
-            f"INSERT INTO memory_log (id, project_id, key, value, created_at) VALUES "
-            f"('{r['id']}', '{r['project_id']}', '{r['key']}', '{value_escaped}'::jsonb, '{r['created_at'].isoformat()}')"
-            f" ON CONFLICT (id) DO NOTHING;"
+            f"INSERT INTO memory_log (project_id, key, value, created_at) VALUES "
+            f"('{r['project_id']}', '{r['key']}', '{val}'::jsonb, "
+            f"'{r['created_at'].isoformat()}');"
         )
 
     lines += ["", "COMMIT;", ""]
     out_path.write_text("\n".join(lines))
-    print(f"✓  Dump saved: {out_path}")
+    print(f"✓  {out_path}")
+    print(f"   projects     : {len(project_rows)} rows")
     print(f"   memory_state : {len(state_rows)} rows")
     print(f"   memory_log   : {len(log_rows)} rows")
+    print(f"\nTo restore: psql $DATABASE_URL < {out_path}")
 
 
 async def cmd_restore(args) -> None:
@@ -143,16 +164,15 @@ async def cmd_restore(args) -> None:
         print(f"Error: file not found: {path}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"⚠  Restoring from {path} into '{os.environ.get('DB_NAME')}'")
+    print(f"⚠  Restoring from {path}")
     answer = input("Continue? [y/N] ").strip().lower()
     if answer != "y":
         print("Aborted.")
         return
 
-    sql = path.read_text()
     conn = await _connect()
     try:
-        await conn.execute(sql)
+        await conn.execute(path.read_text())
         print("✓  Restore complete.")
     finally:
         await conn.close()
@@ -162,14 +182,15 @@ async def cmd_stats(_args) -> None:
     """Print row counts, sizes, top keys, and latest writes."""
     conn = await _connect()
     try:
+        project_count = await conn.fetchval("SELECT COUNT(*) FROM projects")
         state_count = await conn.fetchval("SELECT COUNT(*) FROM memory_state")
-        log_count   = await conn.fetchval("SELECT COUNT(*) FROM memory_log")
+        log_count = await conn.fetchval("SELECT COUNT(*) FROM memory_log")
 
         sizes = await conn.fetch("""
             SELECT relname AS tbl,
                    pg_size_pretty(pg_total_relation_size(oid)) AS size
             FROM pg_class
-            WHERE relname IN ('memory_state', 'memory_log')
+            WHERE relname IN ('projects', 'memory_state', 'memory_log')
             ORDER BY relname
         """)
 
@@ -190,8 +211,8 @@ async def cmd_stats(_args) -> None:
     finally:
         await conn.close()
 
-    # ── Print ──
     print("\n=== Row Counts ===")
+    print(f"  projects     : {project_count:,}")
     print(f"  memory_state : {state_count:,}")
     print(f"  memory_log   : {log_count:,}")
 
@@ -202,7 +223,10 @@ async def cmd_stats(_args) -> None:
     print("\n=== Top 10 Most Written Keys ===")
     if top_keys:
         for r in top_keys:
-            print(f"  [{r['entries']:>5}x]  {r['project_id']}  /  {r['key']}  (last: {r['last_write']})")
+            print(
+                f"  [{r['entries']:>5}x]  {r['project_id']}  /  {r['key']}"
+                f"  (last: {r['last_write']})"
+            )
     else:
         print("  (no data yet)")
 
@@ -210,7 +234,10 @@ async def cmd_stats(_args) -> None:
     if recent:
         for r in recent:
             val_preview = str(r["value"])[:60]
-            print(f"  {r['created_at']}  {r['project_id']} / {r['key']}  →  {val_preview}")
+            print(
+                f"  {r['created_at']}  {r['project_id']} / {r['key']}"
+                f"  →  {val_preview}"
+            )
     else:
         print("  (no data yet)")
 
@@ -221,29 +248,29 @@ async def cmd_stats(_args) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Agent Tools DB management",
+        description="Agent Kit DB management",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("create-schema", help="Create tables and indexes (idempotent)")
-    sub.add_parser("reset",         help="Drop and recreate tables — DEV ONLY")
-    sub.add_parser("stats",         help="Show row counts, sizes, and recent activity")
+    sub.add_parser("reset", help="Drop and recreate tables — DEV ONLY")
+    sub.add_parser("stats", help="Show row counts, sizes, and recent activity")
 
-    p_dump = sub.add_parser("dump", help="Export tables to a SQL file")
-    p_dump.add_argument("--out", metavar="FILE", help="Output path (default: dumps/agent_memory_<timestamp>.sql)")
+    p_backup = sub.add_parser("backup", help="Export schema + data to a single SQL file")
+    p_backup.add_argument("out", metavar="FILE", help="Output path")
 
-    p_restore = sub.add_parser("restore", help="Restore from a SQL dump file")
-    p_restore.add_argument("file", metavar="FILE", help="Path to the dump SQL file")
+    p_restore = sub.add_parser("restore", help="Restore from a backup SQL file")
+    p_restore.add_argument("file", metavar="FILE", help="Path to the backup SQL file")
 
     args = parser.parse_args()
 
     handlers = {
         "create-schema": cmd_create_schema,
-        "reset":         cmd_reset,
-        "stats":         cmd_stats,
-        "dump":          cmd_dump,
-        "restore":       cmd_restore,
+        "reset": cmd_reset,
+        "stats": cmd_stats,
+        "backup": cmd_backup,
+        "restore": cmd_restore,
     }
 
     asyncio.run(handlers[args.command](args))

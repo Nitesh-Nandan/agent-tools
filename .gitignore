@@ -11,3 +11,4 @@ wheels/
 
 # Secrets — never commit
 .env
+.config
