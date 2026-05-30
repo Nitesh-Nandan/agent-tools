@@ -2,18 +2,13 @@
 Entry point for the Agent Tools MCP server (memory + email).
 
 Usage:
-    uv run main.py                    # stdio mode (default, for Claude Desktop etc.)
-    uv run main.py --transport sse    # SSE mode (for HTTP-based clients)
+    uv run main.py                   # stdio mode (default, for Claude Desktop etc.)
+    uv run main.py --transport sse   # SSE mode (for HTTP-based clients)
 """
 
 import argparse
-import asyncio
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
-from src.config import config
+from src.config import config  # config.py calls load_dotenv() on import
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,22 +33,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def _shutdown(mcp_app) -> None:
-    """Cleanly close the DB pool on exit."""
-    from src.memory import db
-    await db.close_pool()
-
-
 def main() -> None:
     args = parse_args()
 
     from src.server import mcp
 
     if args.transport == "sse":
-        # SSE mode — HTTP server (useful for remote agents / testing with curl)
         mcp.run(transport="sse", host=args.host, port=args.port)
     else:
-        # stdio mode — default for Claude Desktop / MCP CLI
         mcp.run(transport="stdio")
 
 

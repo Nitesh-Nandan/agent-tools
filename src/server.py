@@ -11,13 +11,15 @@ Project ID convention  : <org>:<user>:<workflow>         e.g. acme:alice:send_em
 
 from __future__ import annotations
 
+import asyncio
 import re
-from typing import Annotated, Any
+from contextlib import asynccontextmanager
+from typing import Any
 
 from fastmcp import FastMCP
-from pydantic import BaseModel, Field, field_validator
 
 from src.memory import db
+from src.email import sender as email_sender
 
 # ---------------------------------------------------------------------------
 # Validation helpers
@@ -27,101 +29,49 @@ _KEY_RE = re.compile(r"^[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+){1,}$")
 _PROJECT_RE = re.compile(r"^[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+){0,}$")
 
 
-def _validate_key(v: str) -> str:
+def _validate_key(v: str) -> None:
     if not _KEY_RE.match(v):
         raise ValueError(
             "key must follow <domain>:<entity> or <domain>:<entity>:<attribute> "
             "convention using alphanumeric, underscores, or hyphens. Got: " + repr(v)
         )
-    return v
 
 
-def _validate_project_id(v: str) -> str:
+def _validate_project_id(v: str) -> None:
     if not _PROJECT_RE.match(v):
         raise ValueError(
             "project_id must follow <org>:<user>:<workflow> convention. Got: " + repr(v)
         )
-    return v
-
-
-# ---------------------------------------------------------------------------
-# Pydantic input models
-# ---------------------------------------------------------------------------
-
-
-class PutMemoryInput(BaseModel):
-    project_id: Annotated[str, Field(description="<org>:<user>:<workflow>")]
-    key: Annotated[str, Field(description="<domain>:<entity>:<attribute>")]
-    value: Annotated[Any, Field(description="Any JSON-serialisable value")]
-
-    @field_validator("key")
-    @classmethod
-    def check_key(cls, v: str) -> str:
-        return _validate_key(v)
-
-    @field_validator("project_id")
-    @classmethod
-    def check_project_id(cls, v: str) -> str:
-        return _validate_project_id(v)
-
-
-class GetMemoryInput(BaseModel):
-    project_id: Annotated[str, Field(description="<org>:<user>:<workflow>")]
-    key: Annotated[str, Field(description="<domain>:<entity>:<attribute>")]
-
-    @field_validator("key")
-    @classmethod
-    def check_key(cls, v: str) -> str:
-        return _validate_key(v)
-
-    @field_validator("project_id")
-    @classmethod
-    def check_project_id(cls, v: str) -> str:
-        return _validate_project_id(v)
-
-
-class GetMemoryHistoryInput(BaseModel):
-    project_id: Annotated[str, Field(description="<org>:<user>:<workflow>")]
-    key: Annotated[str, Field(description="<domain>:<entity>:<attribute>")]
-    limit: Annotated[int, Field(default=10, ge=1, le=100, description="Max entries to return")]
-
-    @field_validator("key")
-    @classmethod
-    def check_key(cls, v: str) -> str:
-        return _validate_key(v)
-
-    @field_validator("project_id")
-    @classmethod
-    def check_project_id(cls, v: str) -> str:
-        return _validate_project_id(v)
 
 
 # ---------------------------------------------------------------------------
 # MCP Server
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP(name="agent-tools")
+@asynccontextmanager
+async def lifespan(server: FastMCP):
+    yield
+    await db.close_pool()
+
+
+mcp = FastMCP(name="agent-kit", lifespan=lifespan)
 
 
 @mcp.tool(
     description=(
         "Store or update a value in agent memory. "
         "Atomically updates the latest state and appends an immutable history entry. "
-        # key examples make it obvious what the colon-separated format means
-        "key examples: 'email:last_sent', 'email:retry_count', 'user:123:last_login', 'workflow:step_1:status'. "
-        # project_id scopes memory to a workflow so different agents don't collide
+        "key examples: 'email:last_sent', 'email:retry_count', "
+        "'user:123:last_login', 'workflow:step_1:status'. "
         "project_id examples: 'acme:alice:send_email', 'acme:bob:invoice_flow'."
     )
 )
-async def put_memory(
-    project_id: str,
-    key: str,
-    value: Any,
-) -> dict:
+async def put_memory(project_id: str, key: str, value: Any) -> dict:
     """Upsert memory_state and append to memory_log in a single transaction."""
-    inp = PutMemoryInput(project_id=project_id, key=key, value=value)
-    await db.put_memory(inp.project_id, inp.key, inp.value)
-    return {"status": "ok", "project_id": inp.project_id, "key": inp.key}
+    _validate_project_id(project_id)
+    _validate_key(key)
+    await db.put_memory(project_id, key, value)
+    return {"status": "ok", "project_id": project_id, "key": key}
 
 
 @mcp.tool(
@@ -131,16 +81,14 @@ async def put_memory(
         "Returns null if the key has never been set."
     )
 )
-async def get_memory(
-    project_id: str,
-    key: str,
-) -> dict | None:
+async def get_memory(project_id: str, key: str) -> dict | None:
     """Fetch latest value from memory_state."""
-    inp = GetMemoryInput(project_id=project_id, key=key)
-    result = await db.get_memory(inp.project_id, inp.key)
+    _validate_project_id(project_id)
+    _validate_key(key)
+    result = await db.get_memory(project_id, key)
     if result is None:
-        return {"found": False, "project_id": inp.project_id, "key": inp.key}
-    return {"found": True, "project_id": inp.project_id, "key": inp.key, **result}
+        return {"found": False, "project_id": project_id, "key": key}
+    return {"found": True, "project_id": project_id, "key": key, **result}
 
 
 @mcp.tool(
@@ -150,17 +98,16 @@ async def get_memory(
         "Useful for auditing, debugging, or rollback decisions."
     )
 )
-async def get_memory_history(
-    project_id: str,
-    key: str,
-    limit: int = 10,
-) -> dict:
+async def get_memory_history(project_id: str, key: str, limit: int = 10) -> dict:
     """Fetch ordered history from memory_log."""
-    inp = GetMemoryHistoryInput(project_id=project_id, key=key, limit=limit)
-    history = await db.get_memory_history(inp.project_id, inp.key, inp.limit)
+    _validate_project_id(project_id)
+    _validate_key(key)
+    if not (1 <= limit <= 100):
+        raise ValueError("limit must be between 1 and 100")
+    history = await db.get_memory_history(project_id, key, limit)
     return {
-        "project_id": inp.project_id,
-        "key": inp.key,
+        "project_id": project_id,
+        "key": key,
         "count": len(history),
         "entries": history,
     }
@@ -180,28 +127,22 @@ async def send_email(
     from_name: str | None = None,
 ) -> dict:
     """Send an email using configured SMTP credentials."""
-    import asyncio
-    from src.email.sender import EmailSender
-    
-    sender = EmailSender()
-    if not sender.is_configured():
+    if not email_sender.is_configured():
         return {"status": "error", "message": "Email credentials not configured on the server"}
-        
+
     loop = asyncio.get_running_loop()
     success = await loop.run_in_executor(
-        None, 
-        lambda: sender.send_email(
+        None,
+        lambda: email_sender.send_email(
             subject=subject,
             html_body=html_body,
             text_body=text_body,
             to=to,
             reply_to=reply_to,
-            from_name=from_name
-        )
+            from_name=from_name,
+        ),
     )
-    
+
     if success:
         return {"status": "ok", "message": f"Email sent successfully to {', '.join(to)}"}
-    else:
-        return {"status": "error", "message": "Failed to send email. Check server logs."}
-
+    return {"status": "error", "message": "Failed to send email. Check server logs."}

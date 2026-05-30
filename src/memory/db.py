@@ -7,7 +7,7 @@ All writes are transactional: UPSERT into memory_state + INSERT into memory_log.
 
 from __future__ import annotations
 
-import os
+import json
 import uuid
 from typing import Any
 
@@ -23,16 +23,23 @@ from src.config import config
 _pool: asyncpg.Pool | None = None
 
 
+async def _init_conn(conn: asyncpg.Connection) -> None:
+    await conn.set_type_codec(
+        "jsonb",
+        encoder=json.dumps,
+        decoder=json.loads,
+        schema="pg_catalog",
+        format="text",
+    )
+
+
 async def get_pool() -> asyncpg.Pool:
     """Return (and lazily create) the shared connection pool."""
     global _pool
     if _pool is None:
         _pool = await asyncpg.create_pool(
-            host=config.db_host,
-            port=config.db_port,
-            database=config.db_name,
-            user=config.db_user,
-            password=config.db_password,
+            dsn=config.db_url,
+            init=_init_conn,
             min_size=2,
             max_size=10,
             command_timeout=30,
@@ -81,73 +88,35 @@ LIMIT $3;
 """
 
 
-async def put_memory(
-    project_id: str,
-    key: str,
-    value: Any,
-) -> None:
-    """
-    Atomically upsert latest state and append an immutable log entry.
-
-    Both writes happen inside a single transaction — either both succeed
-    or both are rolled back.
-    """
-    import json
-
+async def put_memory(project_id: str, key: str, value: Any) -> None:
+    """Atomically upsert latest state and append an immutable log entry."""
     pool = await get_pool()
-    value_json = json.dumps(value)
     log_id = str(uuid.uuid4())
-
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute(_UPSERT_STATE, project_id, key, value_json)
-            await conn.execute(_INSERT_LOG, log_id, project_id, key, value_json)
+            await conn.execute(_UPSERT_STATE, project_id, key, value)
+            await conn.execute(_INSERT_LOG, log_id, project_id, key, value)
 
 
-async def get_memory(
-    project_id: str,
-    key: str,
-) -> dict | None:
-    """
-    Return the latest snapshot for a key, or None if not found.
-
-    Returns: {"value": ..., "updated_at": "2026-..."}
-    """
-    import json
-
+async def get_memory(project_id: str, key: str) -> dict | None:
+    """Return the latest snapshot for a key, or None if not found."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(_GET_STATE, project_id, key)
-
     if row is None:
         return None
-
     return {
-        "value": json.loads(row["value"]),
+        "value": row["value"],
         "updated_at": row["updated_at"].isoformat(),
     }
 
 
-async def get_memory_history(
-    project_id: str,
-    key: str,
-    limit: int = 10,
-) -> list[dict]:
-    """
-    Return the most recent `limit` log entries for a key, newest first.
-
-    Returns: [{"value": ..., "created_at": "2026-..."}, ...]
-    """
-    import json
-
+async def get_memory_history(project_id: str, key: str, limit: int = 10) -> list[dict]:
+    """Return the most recent `limit` log entries for a key, newest first."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(_GET_HISTORY, project_id, key, limit)
-
     return [
-        {
-            "value": json.loads(row["value"]),
-            "created_at": row["created_at"].isoformat(),
-        }
+        {"value": row["value"], "created_at": row["created_at"].isoformat()}
         for row in rows
     ]

@@ -19,7 +19,7 @@ help:
 	@echo "    make run-sse          Start MCP server (SSE on :8000)"
 	@echo "    make docker-up        Build and start via docker compose"
 	@echo "    make docker-down      Stop docker compose services"
-	@echo "    make docker-build     Build a standalone Docker image (agent-tools-image)"
+	@echo "    make docker-build     Build a standalone Docker image (agent-kit-image)"
 	@echo ""
 	@echo "  DB Utilities"
 	@echo "    make dump             Export tables to dumps/ (plain SQL)"
@@ -56,7 +56,7 @@ docker-down:
 
 .PHONY: docker-build
 docker-build:
-	docker build -t agent-tools-image .
+	docker build -t agent-kit-image .
 
 # ── DB Utilities ───────────────────────────────────────────────────────────────
 .PHONY: dump

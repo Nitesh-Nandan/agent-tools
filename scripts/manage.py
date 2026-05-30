@@ -41,13 +41,10 @@ DUMPS_DIR = ROOT / "dumps"
 # ── DB connection ─────────────────────────────────────────────────────────────
 
 def _dsn() -> str:
-    """Same defaults as src.config — avoids KeyError when .env omits keys."""
-    user = os.environ.get("DB_USER", "postgres")
-    password = os.environ.get("DB_PASSWORD", "")
-    host = os.environ.get("DB_HOST", "localhost")
-    port = os.environ.get("DB_PORT", "5432")
-    name = os.environ.get("DB_NAME", "agent_memory")
-    return f"postgresql://{user}:{password}@{host}:{port}/{name}"
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise SystemExit("ERROR: DATABASE_URL is not set. Add it to your .env file.")
+    return url
 
 
 async def _connect() -> asyncpg.Connection:

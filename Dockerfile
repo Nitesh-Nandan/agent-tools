@@ -39,8 +39,7 @@ EXPOSE 8000
 
 # Default: run migrations then start the server in SSE mode
 # Override CMD if you need stdio mode for a local MCP client:
-#   docker run ... agent-tools-image python main.py --transport stdio
+#   docker run ... agent-kit-image python main.py --transport stdio
 CMD ["sh", "-c", \
-     "psql \"postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}\" \
-            -f migrations/001_memory_tables.sql && \
+     "psql \"${DATABASE_URL}\" -f migrations/001_memory_tables.sql && \
       python main.py --transport sse --host 0.0.0.0 --port 8000"]

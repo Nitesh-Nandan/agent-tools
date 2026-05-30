@@ -1,5 +1,5 @@
 [project]
-name = "agent-tools"
+name = "agent-kit"
 version = "0.1.0"
 description = "MCP agent tools: PostgreSQL memory + optional email (SMTP)"
 readme = "README.md"
@@ -13,4 +13,11 @@ dependencies = [
 ]
 
 [project.scripts]
-agent-tools = "main:main"
+agent-kit = "main:main"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E501"]

@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "agent-tools-sse": {
+    "agent-kit-sse": {
       "command": "npx",
       "args": [
         "-y",
@@ -8,24 +8,20 @@
         "http://localhost:7075/sse"
       ]
     },
-    "agent-tools-stdio-local": {
+    "agent-kit-stdio-local": {
       "command": "uv",
       "args": ["run", "main.py", "--transport", "stdio"],
       "env": {
-        "DB_HOST": "localhost",
-        "DB_PORT": "5455",
-        "DB_NAME": "agent_memory",
-        "DB_USER": "agent",
-        "DB_PASSWORD": "agent_secret"
+        "DATABASE_URL": "postgresql://agent:agent_secret@localhost:5455/agent_memory"
       },
-      "cwd": "/Users/nn359v/workspace/nitesh/2026/agent-tools"
+      "cwd": "/Users/nn359v/workspace/nitesh/2026/agent-kit"
     },
-    "agent-tools-stdio-docker-exec": {
+    "agent-kit-stdio-docker-exec": {
       "command": "docker",
       "args": [
         "compose",
         "-f",
-        "/Users/nn359v/workspace/nitesh/2026/agent-tools/docker-compose.yml",
+        "/Users/nn359v/workspace/nitesh/2026/agent-kit/docker-compose.yml",
         "exec",
         "-i",
         "mcp",
@@ -35,21 +31,17 @@
         "stdio"
       ]
     },
-    "agent-tools-stdio-docker-run": {
+    "agent-kit-stdio-docker-run": {
       "command": "docker",
       "args": [
         "run",
         "-i",
         "--rm",
-        "-e", "DB_HOST=host.docker.internal",
-        "-e", "DB_PORT=5455",
-        "-e", "DB_NAME=agent_memory",
-        "-e", "DB_USER=agent",
-        "-e", "DB_PASSWORD=agent_secret",
+        "-e", "DATABASE_URL=postgresql://agent:agent_secret@host.docker.internal:5455/agent_memory",
         "-e", "EMAIL_USERNAME=you@gmail.com",
         "-e", "EMAIL_PASSWORD=abcdefghijklmnop",
         "-e", "EMAIL_FROM_NAME=AI Coach",
-        "agent-tools-image",
+        "agent-kit-image",
         "python",
         "main.py",
         "--transport",
